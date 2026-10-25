@@ -228,6 +228,41 @@ function createQuickWindow() {
     quickWin.loadFile(quickFile);
   }
 
+  /* ---- 自愈：万一页面被当成纯文本渲染（MIME 推断异常），自动改用 data: URL 重载 ---- */
+  let quickSelfHealed = false;
+  quickWin.webContents.on('did-finish-load', async () => {
+    if (!quickWin || quickWin.isDestroyed()) return;
+    let info = null;
+    try {
+      info = await quickWin.webContents.executeJavaScript(
+        "({ type: document.contentType, pill: !!document.getElementById('pill')," +
+        " text: (document.body ? document.body.innerText : '').slice(0, 40) })"
+      );
+    } catch (e) { /* 页面还没就绪，忽略 */ }
+    if (!info) return;
+
+    startupLog('[quick] 加载完成 mode=' + quickLoadMode + ' contentType=' + info.type +
+      ' pill=' + info.pill + ' text=' + JSON.stringify(info.text));
+
+    const good = info.type === 'text/html' && info.pill === true;
+    if (good || quickSelfHealed) return;
+
+    // 兜底：读出 quick.html 源码，注入绝对资源地址，用 data: URL 强制以 text/html 呈现
+    quickSelfHealed = true;
+    startupLog('[quick] 检测到渲染异常（contentType=' + info.type + ', pill=' + info.pill + '），改用 data: URL 重载');
+    console.log('[deepseek-folder] 悬浮窗渲染异常，改用 data: URL 重载');
+    try {
+      let html = fs.readFileSync(quickFile, 'utf8');
+      if (appUrl) {
+        html = html.split('"../js/df.utils.js"').join(JSON.stringify(appUrl + 'js/df.utils.js'))
+                   .split('"quick.js"').join(JSON.stringify(appUrl + 'desktop/quick.js'));
+      }
+      await quickWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+    } catch (e) {
+      startupLog('[quick] data: URL 重载失败：' + e.message);
+    }
+  });
+
   // 记录位置（并把窗口夹回可见工作区，避免拖到屏幕外找不到）
   quickWin.on('moved', () => {
     if (!quickWin) return;
@@ -577,7 +612,12 @@ async function start() {
     console.log('pill 存在     :', info.hasPill, '| 圆角:', info.pillRadius, '| 背景:', info.pillBg);
     console.log('拖放区文字    :', JSON.stringify(info.dropText));
     console.log('正文前 120 字 :', JSON.stringify(info.bodyText));
-    console.log('head 前 100 字:', JSON.stringify(info.headHtml));
+    // ↓ 仅为源码对照，窗口里并不会显示它；单独标注避免被误读成“窗口显示了源码”
+    console.log('（对照）head 标签源码前 100 字:', JSON.stringify(info.headHtml));
+    const verdict = (info.contentType === 'text/html' && info.hasPill === true)
+      ? '正常：HTML 已被正确解析，窗口显示的是胶囊界面（不是源码文本）'
+      : '异常：页面未按 HTML 解析（会触发 data: URL 自愈重载）';
+    console.log('渲染判定      :', verdict);
     if (info.error) console.log('诊断异常      :', info.error);
     console.log('======================');
     settings.quickWindow = false;
