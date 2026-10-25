@@ -213,22 +213,39 @@ function createQuickWindow() {
   // 加载方式：优先走内嵌服务（对 .html 显式返回 text/html; charset=utf-8，
   // 不依赖 Chromium 对 file:// 的 MIME 推断）；失败再退回 loadFile。
   // 两条路都会记录实际使用的模式，便于 --diagnose-quick 排查。
+  // ── 加载方式：完全内联的 data: 页面（不经过文件 / 不经过 HTTP 服务）──
+  // 这样文档 MIME 由我们自己的 "data:text/html" 前缀决定，绝无可能被当成纯文本，
+  // 也避免了 asar / file:// / 内嵌服务 MIME 推断在不同环境下的差异。
+  // （quick.html + df.utils.js + quick.js 全部内联；页面只通过 IPC 与主进程通信。）
   const quickFile = path.join(__dirname, 'quick.html');
-  if (appUrl) {
-    quickWin.loadURL(appUrl + 'desktop/quick.html').then(() => {
-      quickLoadMode = 'http';
-    }).catch((err) => {
-      quickLoadMode = 'file(fallback)';
-      console.log('[deepseek-folder] 悬浮窗改用 file:// 加载（内嵌服务加载失败：' +
-        (err && err.message) + '）');
-      if (quickWin) quickWin.loadFile(quickFile);
-    });
-  } else {
-    quickLoadMode = 'file(no-server)';
+  function buildInlineQuickHtml() {
+    const html = fs.readFileSync(quickFile, 'utf8');
+    const utilsJs = fs.readFileSync(path.join(ROOT_DIR, 'js', 'df.utils.js'), 'utf8');
+    const quickJs = fs.readFileSync(path.join(__dirname, 'quick.js'), 'utf8');
+    // 注意：必须用**函数**作为 replace 的第二个参数。
+    // 若直接传字符串，JS 里的 `$&`、`$'` 等会被当作替换模式解释
+    // （df.utils.js 的正则里恰好有 `$&`），会把注入的脚本破坏掉。
+    return html
+      .replace('<script src="../js/df.utils.js"></script>', () => '<script>' + utilsJs + '</script>')
+      .replace('<script src="quick.js"></script>', () => '<script>' + quickJs + '</script>');
+  }
+
+  try {
+    quickWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(buildInlineQuickHtml()))
+      .then(() => { quickLoadMode = 'data(inline)'; })
+      .catch((err) => {
+        // 极端兜底：内联失败再退回文件
+        quickLoadMode = 'file(fallback)';
+        console.log('[deepseek-folder] 悬浮窗内联加载失败，改用 file://：' + (err && err.message));
+        if (quickWin) quickWin.loadFile(quickFile);
+      });
+  } catch (e) {
+    quickLoadMode = 'file(fallback)';
+    console.log('[deepseek-folder] 悬浮窗内联构建失败，改用 file://：' + e.message);
     quickWin.loadFile(quickFile);
   }
 
-  /* ---- 自愈：万一页面被当成纯文本渲染（MIME 推断异常），自动改用 data: URL 重载 ---- */
+  /* ---- 渲染自检与自愈（正常情况下应始终判定为“正常”） ---- */
   let quickSelfHealed = false;
   quickWin.webContents.on('did-finish-load', async () => {
     if (!quickWin || quickWin.isDestroyed()) return;
@@ -236,30 +253,30 @@ function createQuickWindow() {
     try {
       info = await quickWin.webContents.executeJavaScript(
         "({ type: document.contentType, pill: !!document.getElementById('pill')," +
-        " text: (document.body ? document.body.innerText : '').slice(0, 40) })"
+        " hasDF: typeof window.DF === 'object' && !!window.DF.utils," +
+        " text: (document.body ? document.body.innerText : '').slice(0, 200) })"
       );
     } catch (e) { /* 页面还没就绪，忽略 */ }
     if (!info) return;
 
     startupLog('[quick] 加载完成 mode=' + quickLoadMode + ' contentType=' + info.type +
-      ' pill=' + info.pill + ' text=' + JSON.stringify(info.text));
+      ' pill=' + info.pill + ' hasDF=' + info.hasDF + ' text=' + JSON.stringify(info.text));
 
-    const good = info.type === 'text/html' && info.pill === true;
+    // 判定“渲染正常”需同时满足：以 HTML 解析、胶囊存在、内联脚本生效、且正文没有源码泄漏
+    const leaked = /margin:|function|var |\/\*/.test(info.text || '');
+    const good = String(info.type || '').toLowerCase() === 'text/html' &&
+      info.pill === true && info.hasDF === true && !leaked && (info.text || '').length < 120;
     if (good || quickSelfHealed) return;
 
-    // 兜底：读出 quick.html 源码，注入绝对资源地址，用 data: URL 强制以 text/html 呈现
+    // 双重兜底：若仍异常，用内联 data: 页面重载一次
     quickSelfHealed = true;
-    startupLog('[quick] 检测到渲染异常（contentType=' + info.type + ', pill=' + info.pill + '），改用 data: URL 重载');
-    console.log('[deepseek-folder] 悬浮窗渲染异常，改用 data: URL 重载');
+    startupLog('[quick] 渲染异常（contentType=' + info.type + ', pill=' + info.pill +
+      ', hasDF=' + info.hasDF + ', text=' + JSON.stringify((info.text || '').slice(0, 60)) + '），用内联 data: 页面重载');
+    console.log('[deepseek-folder] 悬浮窗渲染异常，改用内联 data: 页面重载');
     try {
-      let html = fs.readFileSync(quickFile, 'utf8');
-      if (appUrl) {
-        html = html.split('"../js/df.utils.js"').join(JSON.stringify(appUrl + 'js/df.utils.js'))
-                   .split('"quick.js"').join(JSON.stringify(appUrl + 'desktop/quick.js'));
-      }
-      await quickWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+      await quickWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(buildInlineQuickHtml()));
     } catch (e) {
-      startupLog('[quick] data: URL 重载失败：' + e.message);
+      startupLog('[quick] 内联重载失败：' + e.message);
     }
   });
 
@@ -676,6 +693,18 @@ async function start() {
       ).catch(() => false)
       : Promise.resolve(false));
     checks.push(['悬浮窗样式已生效（圆角胶囊渲染正常）', quickStyled === true]);
+
+    // 关键回归：正文只能是界面文字，不能有源码/CSS 泄漏进窗口
+    const quickBody = await (quickWin
+      ? quickWin.webContents.executeJavaScript(
+        "(document.body ? document.body.innerText : '').trim()"
+      ).catch(() => '')
+      : Promise.resolve(''));
+    const noLeak = typeof quickBody === 'string' &&
+      quickBody.length <= 20 &&
+      quickBody.indexOf('拖入链接') >= 0 &&
+      !/margin:|function|var |<!|<\/?title/.test(quickBody);
+    checks.push(['悬浮窗无源码泄漏（正文仅为「拖入链接」）', noLeak === true]);
 
     // 3) 模拟从悬浮窗拖入一个 DeepSeek 链接
     const payload = {

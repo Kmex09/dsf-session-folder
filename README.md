@@ -46,7 +46,7 @@ npm start          # 打开 DeepSeek Folder 桌面应用
   拖进去，即自动唤起主窗口并完成导入；窗口位置会被记住，点小窗本体也能唤起主窗口；
 - 启动异常时：双击 `run-deepseek-folder.cmd`（诊断启动器）—— 它会写 `dsf-run.log` 并附上应用 `startup.log`，一次拿到完整现场；
 - 快捷键：`F5` / `Ctrl+R` 刷新、`F12` 开发者工具、`F11` 全屏、`Ctrl+W` 关闭；
-- 自检：`npm run smoke`（启动并校验数据接口）、`npm run smoke:quick`（悬浮窗 12 项检查）；
+- 自检：`npm run smoke`（启动并校验数据接口）、`npm run smoke:quick`（悬浮窗 13 项检查）；
   悬浮窗显示异常时用 `npm run diagnose:quick` 打印实际状态（加载方式 / contentType / 样式）；
   `npm run smoke:write` 后再 `npm run smoke:persist`（写入 → 新进程重启 → 校验数据仍在）；
 - 打包 exe：`npm install -D electron-builder && npm run dist`，产物在 `dist/`：
@@ -142,7 +142,7 @@ npm test                      # 一次跑完下面两个 Node 测试套件
 node tests/smoke.js           # 数据层 / 链接解析 / 索引缓存 / 批量提交 / 改名迁移（94 项断言）
 node tests/desktop-server.js  # 内嵌服务接口 + 访问控制 + 数据文件迁移（26 项断言）
 npm run smoke                 # 桌面版启动自检
-npm run smoke:quick           # 快速导入悬浮窗自检（12 项）
+npm run smoke:quick           # 快速导入悬浮窗自检（13 项）
 npm run smoke:close           # 关窗回归自检（进程必须在 5 秒内退出）
 npm run diagnose:quick        # 悬浮窗状态诊断（排查显示异常）
 npm run smoke:write && npm run smoke:persist   # 桌面版“写入 → 重启 → 数据仍在”自检
