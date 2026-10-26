@@ -362,6 +362,40 @@ assert(store4.stats().folders === 1 && store4.data.folders[0].name === '新版�
   '新键存在时直接使用新键（不被旧键覆盖）');
 assert(store4.wasMigrated() === false, '未发生迁移时不误报迁移');
 
+section('备份合并 mergeJson（不覆盖现有数据）');
+delete mem['deepseek-folder.data.v1'];
+delete mem['dsf.data.v1'];
+load('js/df.utils.js');
+load('js/df.store.js');
+const mstore = sandbox.window.DF.store;
+const mHome = mstore.createFolder('学习笔记');
+mstore.importItems([{ url: 'https://chat.deepseek.com/a/chat/s/s1', title: '牛顿力学' }], mHome.id);
+const backupObj = {
+  v: 1,
+  savedAt: 123,
+  folders: [
+    { id: 'bf1', name: '学习笔记', parentId: null, createdAt: 1, pinned: false },  // 同名 → 复用现有
+    { id: 'bf2', name: '计网', parentId: 'bf1', createdAt: 2, pinned: true }         // 新文件夹（父级需重映射）
+  ],
+  sessions: [
+    { id: 'bs1', folderId: 'bf2', title: 'OSI', url: 'https://chat.deepseek.com/a/chat/s/s1' }, // 重复链接 → 跳过
+    { id: 'bs2', folderId: 'bf2', title: 'DNS', url: 'https://chat.deepseek.com/a/chat/s/s9' },
+    { id: 'bs3', folderId: 'bf1', title: 'HTTP', url: 'https://chat.deepseek.com/a/chat/s/s8' }
+  ],
+  recentClosed: [],
+  settings: {}
+};
+const mergeRes = mstore.mergeJson(JSON.stringify(backupObj));
+assert(mergeRes.addedFolders === 1, '合并：新增 1 个文件夹（同名文件夹被复用）');
+assert(mergeRes.addedSessions === 2, '合并：新增 2 个会话');
+assert(mergeRes.skipped === 1, '合并：重复链接被跳过');
+assert(mstore.stats().sessions === 3, '合并后会话数 = 3（原有 1 + 新增 2）');
+const mergedNet = mstore.data.folders.filter(function (f) { return f.name === '计网'; })[0];
+assert(!!mergedNet && mergedNet.parentId === mHome.id, '合并：新文件夹的父级被重映射到被复用的文件夹');
+assert(mstore.data.sessions.some(function (s) { return s.title === 'DNS' && s.folderId === mergedNet.id; }),
+  '合并：会话指向重映射后的文件夹');
+assert(mstore.mergeJson(JSON.stringify(backupObj)).addedSessions === 0, '再次合并同一备份不会重复添加');
+
 console.log('\n========================================');
 console.log('结果：通过 ' + passed + ' 项，失败 ' + failed + ' 项');
 process.exit(failed ? 1 : 0);

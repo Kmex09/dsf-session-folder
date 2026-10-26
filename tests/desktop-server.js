@@ -90,6 +90,15 @@ async function main() {
   const onDisk = JSON.parse(fs.readFileSync(TMP, 'utf8'));
   assert(onDisk.folders.length === 1, '数据确实落到磁盘文件');
 
+  // 防误覆盖：每次写入都应把上一版保留为 .bak.json
+  const bak = TMP.replace(/\.json$/i, '') + '.bak.json';
+  assert(fs.existsSync(bak), '写入时自动保留上一版（.bak.json）');
+  if (fs.existsSync(bak)) {
+    const bakData = JSON.parse(fs.readFileSync(bak, 'utf8'));
+    assert(Array.isArray(bakData.folders) && Array.isArray(bakData.sessions),
+      '上一版备份是有效的数据文件');
+  }
+
   console.log('\n—— 访问控制 ——');
   const noToken = await fetch(base + '/api/state');
   assert(noToken.status === 403, '无令牌 GET 被拒绝（' + noToken.status + '）');

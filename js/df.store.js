@@ -705,6 +705,89 @@
       });
     }
 
+    /**
+     * 把备份**合并**进当前数据（不丢现有内容）：
+     * - 文件夹：按 (名称, 父级) 去重；重复则复用现有文件夹（并把备份里指向它的会话改指过去）
+     * - 会话：按链接去重（utils.urlKey），重复的跳过
+     * - 最近关闭：按链接去重追加
+     * 返回 { folders, sessions, addedFolders, addedSessions, skipped }
+     */
+    function mergeJson(text) {
+      var obj = null;
+      try { obj = JSON.parse(text); } catch (e) { throw new Error('备份文件不是有效的 JSON'); }
+      if (!obj || !Array.isArray(obj.folders) || !Array.isArray(obj.sessions)) {
+        throw new Error('备份文件格式不正确');
+      }
+      return mutate(function () {
+        var incoming = migrate(obj);
+        var seenFolderId = {};
+        var seenUrl = {};
+        data.folders.forEach(function (f) { seenFolderId[f.id] = true; });
+        data.sessions.forEach(function (s) { seenUrl[utils.urlKey(s.url)] = true; });
+
+        var idMap = {};           // 备份里的文件夹 id → 当前数据里的 id
+        var addedFolders = 0;
+        var addedSessions = 0;
+        var skipped = 0;
+
+        incoming.folders.forEach(function (f) {
+          if (seenFolderId[f.id]) { idMap[f.id] = f.id; return; }
+          var same = null;
+          for (var i = 0; i < data.folders.length; i++) {
+            var x = data.folders[i];
+            if (x.name === f.name && (x.parentId || null) === (f.parentId || null)) { same = x; break; }
+          }
+          if (same) { idMap[f.id] = same.id; return; }
+          var copy = {
+            id: f.id, name: f.name, parentId: f.parentId || null,
+            createdAt: f.createdAt || Date.now(), pinned: !!f.pinned
+          };
+          data.folders.push(copy);
+          seenFolderId[copy.id] = true;
+          idMap[f.id] = copy.id;
+          addedFolders++;
+        });
+
+        // 父级重映射：备份里的文件夹若被合并到现有文件夹，其子文件夹的 parentId 要跟着改
+        // （父文件夹可能排在子文件夹之后，所以统一在添加完后再处理一遍）
+        data.folders.forEach(function (f) {
+          if (f.parentId && idMap[f.parentId] && idMap[f.parentId] !== f.parentId) {
+            f.parentId = idMap[f.parentId];
+          }
+        });
+
+        incoming.sessions.forEach(function (s) {
+          var k = utils.urlKey(s.url);
+          if (seenUrl[k]) { skipped++; return; }
+          if (idMap[s.folderId]) s.folderId = idMap[s.folderId];
+          else if (!seenFolderId[s.folderId]) s.folderId = data.folders.length ? data.folders[0].id : null;
+          data.sessions.push(s);
+          seenUrl[k] = true;
+          addedSessions++;
+        });
+
+        (incoming.recentClosed || []).forEach(function (r) {
+          var k = utils.urlKey(r.url);
+          if ((data.recentClosed || []).some(function (x) { return utils.urlKey(x.url) === k; })) return;
+          data.recentClosed.push(r);
+        });
+
+        if (incoming.settings && typeof incoming.settings === 'object') {
+          Object.keys(incoming.settings).forEach(function (key) {
+            if (data.settings[key] === undefined) data.settings[key] = incoming.settings[key];
+          });
+        }
+
+        return {
+          folders: data.folders.length,
+          sessions: data.sessions.length,
+          addedFolders: addedFolders,
+          addedSessions: addedSessions,
+          skipped: skipped
+        };
+      });
+    }
+
     /* ------------------------------ 对外 API ------------------------------ */
 
     var store = {
@@ -756,6 +839,7 @@
       setSetting: setSetting,
       exportJson: exportJson,
       importJson: importJson,
+    mergeJson: mergeJson,
 
       // 批量变更（内部使用同一套 mutate；导出便于将来扩展批处理场景）
       batch: mutate

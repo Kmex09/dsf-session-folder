@@ -571,33 +571,60 @@
   }
 
   function importBackup() {
-    ui.confirm({
-      title: '导入备份文件？',
-      message: '导入将覆盖当前全部数据（文件夹、会话、最近关闭）。建议先「导出备份」。',
-      confirmText: '选择文件…'
-    }).then(function (ok) {
-      if (!ok) return;
-      var input = document.createElement('input');
-      input.type = 'file';
-      input.accept = '.json,application/json';
-      input.addEventListener('change', function () {
-        var file = input.files && input.files[0];
-        if (!file) return;
-        var reader = new FileReader();
-        reader.onload = function () {
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.addEventListener('change', function () {
+      var file = input.files && input.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        var text = String(reader.result);
+        var backup = null;
+        try { backup = JSON.parse(text); } catch (e) { /* 下面统一提示 */ }
+        if (!backup || !Array.isArray(backup.folders) || !Array.isArray(backup.sessions)) {
+          ui.toast('备份文件格式不正确（需要包含 folders / sessions）', 'err', 3600);
+          return;
+        }
+        var cur = store.data;
+        // 关键：默认**合并**，只有用户明确选择才整体替换（替换前服务端会自动保留上一版）
+        ui.picker({
+          title: '导入方式（备份：' + backup.folders.length + ' 个文件夹 · ' + backup.sessions.length + ' 个会话）',
+          items: [
+            {
+              value: 'merge',
+              label: '合并到现有数据（推荐）',
+              sub: '现有 ' + cur.folders.length + ' 个文件夹 · ' + cur.sessions.length + ' 个会话；按链接去重',
+              icon: 'i-folder'
+            },
+            {
+              value: 'replace',
+              label: '整体替换',
+              sub: '清空现有数据，仅保留备份内容（会自动保留上一版数据文件）',
+              icon: 'i-trash'
+            }
+          ]
+        }).then(function (choice) {
+          if (!choice) return;
           try {
-            var stats = store.importJson(String(reader.result));
-            ui.toast('恢复成功：' + stats.folders + ' 个文件夹 · ' + stats.sessions + ' 个会话', 'ok', 3600);
+            if (choice === 'merge') {
+              var m = store.mergeJson(text);
+              ui.toast('已合并：新增 ' + m.addedFolders + ' 个文件夹 · ' + m.addedSessions +
+                ' 个会话（跳过重复 ' + m.skipped + '）', 'ok', 4600);
+            } else {
+              var r = store.importJson(text);
+              ui.toast('已替换为备份内容：' + r.folders + ' 个文件夹 · ' + r.sessions + ' 个会话', 'ok', 4600);
+            }
             goRoot();
           } catch (err) {
-            ui.toast(err.message || '备份文件格式不正确', 'err', 3600);
+            ui.toast(err.message || '导入失败', 'err', 3600);
           }
-        };
-        reader.onerror = function () { ui.toast('读取文件失败', 'err'); };
-        reader.readAsText(file);
-      });
-      input.click();
+        });
+      };
+      reader.onerror = function () { ui.toast('读取文件失败', 'err'); };
+      reader.readAsText(file);
     });
+    input.click();
   }
 
   $('btnExportBackup').addEventListener('click', exportBackup);

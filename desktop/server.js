@@ -172,6 +172,12 @@ function createServer(opts) {
     const tmp = dataFile + '.' + process.pid + '.' + Date.now() + '.tmp';
     try {
       fs.writeFileSync(tmp, payload, 'utf8');
+      // 写入前保留上一版：误覆盖（如导入备份）后仍能找回
+      try {
+        if (fs.existsSync(dataFile)) {
+          fs.copyFileSync(dataFile, dataFile.replace(/\.json$/i, '') + '.bak.json');
+        }
+      } catch (_e) { /* 备份失败不影响主写入 */ }
       fs.renameSync(tmp, dataFile); // 原子替换
     } catch (e) {
       try { fs.rmSync(tmp, { force: true }); } catch (_e) { /* ignore */ }

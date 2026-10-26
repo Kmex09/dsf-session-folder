@@ -24,6 +24,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import sys
 import threading
 import webbrowser
@@ -33,6 +34,8 @@ from urllib.parse import unquote as urllib_parse_unquote
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(ROOT, 'deepseek-folder-data.json')
+# 每次写入前保留的上一版数据（误覆盖后可从它找回）
+DATA_BAK_FILE = os.path.join(ROOT, 'deepseek-folder-data.bak.json')
 # v0.5.0 改名前的旧数据文件名（用于自动迁移，迁移后旧文件保留）
 LEGACY_DATA_FILES = ('dsf-data.json',)
 API_PATH = '/api/state'
@@ -140,8 +143,8 @@ class DFHandler(SimpleHTTPRequestHandler):
         target = os.path.abspath(os.path.join(ROOT, rel.lstrip('/')))
         if target != ROOT and not target.startswith(ROOT + os.sep):
             return True  # 目录穿越
-        if target == DATA_FILE:
-            return True  # 数据文件不经静态托管外泄（页面走 /api/state）
+        if target in (DATA_FILE, DATA_BAK_FILE):
+            return True  # 数据文件（含上一版备份）不经静态托管外泄（页面走 /api/state）
         segments = os.path.relpath(target, ROOT).split(os.sep)
         for seg in segments:
             if seg.startswith('.') or seg == 'node_modules':
@@ -228,6 +231,12 @@ class DFHandler(SimpleHTTPRequestHandler):
             try:
                 with open(tmp, 'wb') as fh:
                     fh.write(payload)
+                # 写入前保留上一版：误覆盖（如导入备份）后仍能找回
+                try:
+                    if os.path.exists(DATA_FILE):
+                        shutil.copyfile(DATA_FILE, DATA_BAK_FILE)
+                except OSError:
+                    pass
                 os.replace(tmp, DATA_FILE)  # 原子替换，避免写到一半损坏
             except Exception:
                 if os.path.exists(tmp):
